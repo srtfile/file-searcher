@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Advanced File Search Web</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #111827; color: #e5e7eb; }
+    header { padding: 18px 22px; background: #0f172a; border-bottom: 1px solid #334155; }
+    h1 { margin: 0; font-size: 22px; }
+    .root { color: #93c5fd; font-size: 13px; margin-top: 6px; word-break: break-all; }
+    main { padding: 18px; display: grid; gap: 14px; }
+    .card { background: #1f2937; border: 1px solid #374151; border-radius: 12px; padding: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; align-items: end; }
+    label { display: block; font-size: 12px; color: #cbd5e1; margin-bottom: 5px; }
+    input, select, button { width: 100%; box-sizing: border-box; border-radius: 8px; border: 1px solid #4b5563; padding: 10px; background: #111827; color: #f9fafb; }
+    button { cursor: pointer; background: #2563eb; border-color: #2563eb; font-weight: 700; }
+    button:hover { background: #1d4ed8; }
+    .span-2 { grid-column: span 2; }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-12 { grid-column: span 12; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .status { color: #a7f3d0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #374151; padding: 9px; vertical-align: top; }
+    th { text-align: left; color: #bfdbfe; position: sticky; top: 0; background: #1f2937; }
+    code { color: #fde68a; white-space: pre-wrap; word-break: break-word; }
+    .muted { color: #94a3b8; font-size: 13px; }
+    .danger { color: #fecaca; }
+    .results { max-height: 60vh; overflow: auto; border: 1px solid #374151; border-radius: 10px; }
+    a { color: #93c5fd; }
+    @media (max-width: 900px) { .span-2,.span-3,.span-4,.span-6 { grid-column: span 12; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 Advanced File Search Web</h1>
+    <div class="root">SEARCH_ROOT: {{ search_root }}</div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="grid">
+        <div class="span-3">
+          <label>Auth token</label>
+          <input id="token" type="password" value="{{ default_token }}" placeholder="Render AUTH_TOKEN" />
+        </div>
+        <div class="span-3">
+          <label>Directory inside SEARCH_ROOT</label>
+          <input id="directory" value="" placeholder="empty = root" />
+        </div>
+        <div class="span-3">
+          <label>Search pattern</label>
+          <input id="pattern" placeholder="text, regex, or URL part" autofocus />
+        </div>
+        <div class="span-3">
+          <label>Search mode</label>
+          <select id="mode">
+            <option>Exact Text</option>
+            <option>Regex</option>
+            <option>URL</option>
+          </select>
+        </div>
+
+        <div class="span-4">
+          <label>Extensions, comma separated</label>
+          <input id="extensions" value="{{ default_extensions }}" />
+        </div>
+        <div class="span-2">
+          <label>Max file MB</label>
+          <input id="maxFileSize" type="number" min="0.1" max="200" step="0.1" value="10" />
+        </div>
+        <div class="span-2">
+          <label>Max results</label>
+          <input id="maxResults" type="number" min="1" max="10000" value="1000" />
+        </div>
+        <div class="span-2">
+          <label>Case sensitive</label>
+          <select id="caseSensitive"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
+        <div class="span-2">
+          <label>&nbsp;</label>
+          <button id="searchBtn">Search</button>
+        </div>
+      </div>
+      <p class="muted">Render can only search files stored on the Render server. To search your Windows computer, run this app locally and set SEARCH_ROOT to your folder.</p>
+      <div class="status" id="status">Ready.</div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <button id="listBtn" style="max-width:180px">List directory</button>
+        <span class="muted" id="summary"></span>
+      </div>
+      <div class="results" style="margin-top: 10px;">
+        <table>
+          <thead><tr><th style="width:36%">File</th><th style="width:70px">Line</th><th>Match / directory item</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function token() {
+      const t = $('token').value.trim();
+      localStorage.setItem('fileSearchToken', t);
+      return t;
+    }
+    const saved = localStorage.getItem('fileSearchToken');
+    if (saved && !$('token').value) $('token').value = saved;
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+
+    function downloadLink(path) {
+      const url = `/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token())}`;
+      return `<a href="${url}" target="_blank">${escapeHtml(path)}</a>`;
+    }
+
+    async function api(url, options = {}) {
+      options.headers = Object.assign({'X-Auth-Token': token()}, options.headers || {});
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    $('searchBtn').onclick = async () => {
+      $('status').textContent = 'Searching...';
+      $('tbody').innerHTML = '';
+      $('summary').textContent = '';
+      try {
+        const payload = {
+          directory: $('directory').value.trim(),
+          pattern: $('pattern').value,
+          mode: $('mode').value,
+          extensions: $('extensions').value.split(',').map(x => x.trim()).filter(Boolean),
+          case_sensitive: $('caseSensitive').value === 'true',
+          max_file_size_mb: Number($('maxFileSize').value || 10),
+          max_results: Number($('maxResults').value || 1000)
+        };
+        const data = await api('/api/search', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+        $('status').textContent = 'Done.';
+        $('summary').textContent = `Scanned ${data.scanned_files} files. ${data.result_count} matches in ${data.matched_file_count} files.${data.truncated ? ' Results were truncated.' : ''}`;
+        const rows = data.results.map(r => `<tr><td>${downloadLink(r.file)}</td><td>${r.line}</td><td><code>${escapeHtml(r.match)}</code></td></tr>`).join('');
+        $('tbody').innerHTML = rows || '<tr><td colspan="3" class="muted">No matches found.</td></tr>';
+      } catch (err) {
+        $('status').innerHTML = `<span class="danger">${escapeHtml(err.message)}</span>`;
+      }
+    };
+
+    $('listBtn').onclick = async () => {
+      $('status').textContent = 'Loading directory...';
+      $('tbody').innerHTML = '';
+      try {
+        const dir = encodeURIComponent($('directory').value.trim());
+        const data = await api(`/api/list?dir=${dir}`);
+        $('status').textContent = 'Directory loaded.';
+        $('summary').textContent = `${data.items.length} items`;
+        const rows = data.items.map(item => {
+          const label = item.is_dir ? '📁 ' + item.relative_path : '📄 ' + item.relative_path;
+          const fileCell = item.is_dir ? escapeHtml(label) : downloadLink(item.relative_path);
+          const hint = item.is_dir ? 'Directory. Put this path in the directory box to search inside it.' : `${item.size} bytes`;
+          return `<tr><td>${fileCell}</td><td>-</td><td>${escapeHtml(hint)}</td></tr>`;
+        }).join('');
+        $('tbody').innerHTML = rows || '<tr><td colspan="3" class="muted">Empty directory.</td></tr>';
+      } catch (err) {
+        $('status').innerHTML = `<span class="danger">${escapeHtml(err.message)}</span>`;
+      }
+    };
+  </script>
+</body>
+</html>
